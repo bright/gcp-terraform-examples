@@ -1,0 +1,6 @@
+*.tfstate.backup
+node_modules
+.terraform
+.terraform.lock.hcl
+*.zip
+.idea
