@@ -74,7 +74,6 @@ resource "google_secret_manager_secret_iam_member" "gae-access-first-api-key" {
   member    = "serviceAccount:${google_project.simple-app-engine.project_id}@appspot.gserviceaccount.com"
 }
 
-
 resource "google_secret_manager_secret" "second-api-key" {
   project   = google_project.simple-app-engine.project_id
   secret_id = "${var.deploy_env}-second-api-key"
@@ -119,24 +118,6 @@ resource "google_secret_manager_secret_iam_member" "gae-access-forth-api-key" {
 
 #region Optional but in the domain of CICD
 
-# Shouldn't be used like this but this, it's just for demo
-resource "google_secret_manager_secret_version" "first-api-key-version" {
-  secret      = google_secret_manager_secret.first-api-key.id
-  secret_data = "abc123"
-}
-resource "google_secret_manager_secret_version" "second-api-key-version" {
-  secret      = google_secret_manager_secret.second-api-key.id
-  secret_data = "567efg"
-}
-resource "google_secret_manager_secret_version" "third-api-key-version" {
-  secret      = google_secret_manager_secret.third-api-key.id
-  secret_data = "hij789"
-}
-resource "google_secret_manager_secret_version" "forth-api-key-version" {
-  secret      = google_secret_manager_secret.forth-api-key.id
-  secret_data = "xyz987"
-}
-
 # can also be specified in yaml and CLI invocations files
 resource "google_app_engine_standard_app_version" "latest_version" {
   project    = google_project.simple-app-engine.project_id
@@ -162,11 +143,7 @@ resource "google_app_engine_standard_app_version" "latest_version" {
   instance_class = "F1"
 
   automatic_scaling {
-    max_concurrent_requests = 10
-    min_idle_instances      = 0
-    max_idle_instances      = 3
-    min_pending_latency     = "1s"
-    max_pending_latency     = "5s"
+    min_idle_instances = 0
     standard_scheduler_settings {
       target_cpu_utilization        = 0.5
       target_throughput_utilization = 0.75
@@ -174,9 +151,79 @@ resource "google_app_engine_standard_app_version" "latest_version" {
       max_instances                 = 4
     }
   }
+  inbound_services = ["INBOUND_SERVICE_WARMUP"]
   noop_on_destroy           = true
   delete_service_on_destroy = true
 }
+
+resource "google_app_engine_service_split_traffic" "default_version_split" {
+  project         = google_project.simple-app-engine.project_id
+  service         = google_app_engine_standard_app_version.latest_version.service
+  migrate_traffic = var.deploy_env == "stage"
+  split {
+    allocations = {
+      (google_app_engine_standard_app_version.latest_version.version_id) = 1
+    }
+    shard_by = "RANDOM"
+  }
+}
+
+resource "google_app_engine_standard_app_version" "alpha_latest_version" {
+  project    = google_project.simple-app-engine.project_id
+  version_id = "${google_project.simple-app-engine.name}-${data.archive_file.sample-node-app.output_md5}"
+  service    = "alpha"
+  runtime    = "nodejs20"
+
+  #   service_account = google_service_account.app-engine-app-service-account.email
+
+  entrypoint {
+    shell = "node index.js"
+  }
+  env_variables = {
+    DEPLOY_ENV = var.deploy_env
+  }
+
+  deployment {
+    zip {
+      source_url = "https://storage.googleapis.com/${google_storage_bucket_object.app.bucket}/${google_storage_bucket_object.app.name}"
+    }
+  }
+
+  instance_class = "F1"
+
+  automatic_scaling {
+    min_idle_instances = 0
+  }
+  inbound_services = ["INBOUND_SERVICE_WARMUP"]
+
+  noop_on_destroy           = true
+  delete_service_on_destroy = true
+}
+
+resource "google_app_engine_service_split_traffic" "alpha_version_split" {
+  project         = google_project.simple-app-engine.project_id
+  service         = google_app_engine_standard_app_version.alpha_latest_version.service
+  migrate_traffic = var.deploy_env == "stage"
+  split {
+    allocations = {
+      (google_app_engine_standard_app_version.alpha_latest_version.version_id) = 1
+    }
+    shard_by = "RANDOM"
+  }
+}
+
+resource "google_app_engine_application_url_dispatch_rules" "alpha_rule" {
+  project = google_project.simple-app-engine.project_id
+  dispatch_rules {
+    domain  = "alpha-dot-${google_app_engine_application.app-engine-app.default_hostname}"
+    path    = "/*"
+    service = google_app_engine_standard_app_version.alpha_latest_version.service
+  }
+  depends_on = [
+    google_app_engine_application.app-engine-app, google_app_engine_standard_app_version.alpha_latest_version
+  ]
+}
+
 
 # Not strictly required but makes it easier to showcase things working end to end
 data "archive_file" "sample-node-app" {
@@ -193,6 +240,24 @@ resource "google_storage_bucket_object" "app" {
 
 output "app-engine-app-domain" {
   value = google_app_engine_application.app-engine-app.default_hostname
+}
+
+# Shouldn't be used like this but this, it's just for demo
+resource "google_secret_manager_secret_version" "first-api-key-version" {
+  secret      = google_secret_manager_secret.first-api-key.id
+  secret_data = "abc123"
+}
+resource "google_secret_manager_secret_version" "second-api-key-version" {
+  secret      = google_secret_manager_secret.second-api-key.id
+  secret_data = "567efg"
+}
+resource "google_secret_manager_secret_version" "third-api-key-version" {
+  secret      = google_secret_manager_secret.third-api-key.id
+  secret_data = "hij789"
+}
+resource "google_secret_manager_secret_version" "forth-api-key-version" {
+  secret      = google_secret_manager_secret.forth-api-key.id
+  secret_data = "xyz987"
 }
 
 #endregion

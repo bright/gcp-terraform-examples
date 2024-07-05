@@ -14,7 +14,8 @@ function deployEnv () {
 app.get('/', (req, res) => {
 
   res.status(200).json({
-    message: 'Welcome to my API'
+    message: 'Welcome to my API',
+    GAE_MODULE_NAME: process.env.GAE_MODULE_NAME ?? Object.keys(process.env).toString(),
   })
 })
 
