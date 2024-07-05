@@ -242,6 +242,14 @@ output "app-engine-app-domain" {
   value = google_app_engine_application.app-engine-app.default_hostname
 }
 
+output "default-version-url" {
+  value = "https://${google_app_engine_application.app-engine-app.default_hostname}"
+}
+
+output "alpha-version-url" {
+  value = "https://alpha-dot-${google_app_engine_application.app-engine-app.default_hostname}"
+}
+
 # Shouldn't be used like this but this, it's just for demo
 resource "google_secret_manager_secret_version" "first-api-key-version" {
   secret      = google_secret_manager_secret.first-api-key.id
