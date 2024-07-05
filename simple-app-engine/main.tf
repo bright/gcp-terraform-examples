@@ -2,7 +2,7 @@ terraform {
   required_providers {
     google = {
       source  = "hashicorp/google"
-      version = "4.51.0"
+      version = "5.36.0"
     }
     archive = {
       source  = "hashicorp/archive"
@@ -65,7 +65,8 @@ resource "google_secret_manager_secret" "first-api-key" {
   project   = google_project.simple-app-engine.project_id
   secret_id = "${var.deploy_env}-first-api-key"
   replication {
-    automatic = true
+    auto {
+    }
   }
 }
 resource "google_secret_manager_secret_iam_member" "gae-access-first-api-key" {
@@ -78,7 +79,7 @@ resource "google_secret_manager_secret" "second-api-key" {
   project   = google_project.simple-app-engine.project_id
   secret_id = "${var.deploy_env}-second-api-key"
   replication {
-    automatic = true
+    auto {}
   }
 }
 
@@ -92,7 +93,7 @@ resource "google_secret_manager_secret" "third-api-key" {
   project   = google_project.simple-app-engine.project_id
   secret_id = "${var.deploy_env}-third-api-key"
   replication {
-    automatic = true
+    auto {}
   }
 }
 
@@ -106,7 +107,7 @@ resource "google_secret_manager_secret" "forth-api-key" {
   project   = google_project.simple-app-engine.project_id
   secret_id = "${var.deploy_env}-forth-api-key"
   replication {
-    automatic = true
+    auto {}
   }
 }
 
@@ -114,6 +115,14 @@ resource "google_secret_manager_secret_iam_member" "gae-access-forth-api-key" {
   secret_id = google_secret_manager_secret.forth-api-key.id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_project.simple-app-engine.project_id}@appspot.gserviceaccount.com"
+}
+
+resource "google_logging_project_bucket_config" "_Default" {
+  project    = google_project.simple-app-engine.project_id
+  location  = "global"
+  retention_days = 30
+  bucket_id = "_Default"
+  enable_analytics = true
 }
 
 #region Optional but in the domain of CICD
