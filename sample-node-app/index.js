@@ -40,10 +40,10 @@ async function getSecretValue (secretKey) {
 
 app.get('/secrets', asyncHandler(async (req, res) => {
   const [first, second, third, forth] = await Promise.all([
-    await getSecretValue(`${deployEnv()}-first-api-key`),
-    await getSecretValue(`${deployEnv()}-second-api-key`),
-    await getSecretValue(`${deployEnv()}-third-api-key`),
-    await getSecretValue(`${deployEnv()}-forth-api-key`),
+    await getSecretValue(`${deployEnv()}-first-api-key`).catch(e => e.toString()),
+    await getSecretValue(`${deployEnv()}-second-api-key`).catch(e => e.toString()),
+    await getSecretValue(`${deployEnv()}-third-api-key`).catch(e => e.toString()),
+    await getSecretValue(`${deployEnv()}-forth-api-key`).catch(e => e.toString()),
   ])
 
   res.status(200).json({
