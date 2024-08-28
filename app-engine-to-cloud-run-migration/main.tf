@@ -12,6 +12,10 @@ terraform {
       source  = "hashicorp/random"
       version = "3.6.2"
     }
+    docker = {
+      source  = "kreuzwerker/docker"
+      version = "3.0.2"
+    }
   }
 }
 
@@ -21,6 +25,10 @@ provider "google" {
 
 variable "deploy_env" {
   default = "stage"
+}
+
+variable "image_tag" {
+  default = "v2"
 }
 
 variable "billing_account" {
@@ -35,6 +43,9 @@ variable "location_id" {
   default = "europe-central2"
 }
 
+variable "google_application_credentials_access_token" {
+}
+
 resource "google_project" "app-engine-to-cloud-run-migration" {
   name            = "${var.deploy_env}-gae-to-cloud-run"
   project_id      = "${var.deploy_env}-gae-to-cloud-run"
@@ -45,6 +56,7 @@ resource "google_project" "app-engine-to-cloud-run-migration" {
 resource "google_project_service" "enabled_services" {
   for_each = toset([
     "secretmanager.googleapis.com",
+    "run.googleapis.com",
   ])
   project = google_project.app-engine-to-cloud-run-migration.project_id
   service = each.key
@@ -70,6 +82,7 @@ resource "google_secret_manager_secret" "first-api-key" {
   }
   depends_on = [google_project_service.enabled_services]
 }
+
 resource "google_secret_manager_secret_iam_member" "gae-access-first-api-key" {
   secret_id = google_secret_manager_secret.first-api-key.id
   role      = "roles/secretmanager.secretAccessor"
@@ -77,11 +90,108 @@ resource "google_secret_manager_secret_iam_member" "gae-access-first-api-key" {
 }
 
 resource "google_logging_project_bucket_config" "_Default" {
-  project    = google_project.app-engine-to-cloud-run-migration.project_id
-  location  = "global"
-  retention_days = 30
-  bucket_id = "_Default"
+  project          = google_project.app-engine-to-cloud-run-migration.project_id
+  location         = "global"
+  retention_days   = 30
+  bucket_id        = "_Default"
   enable_analytics = true
+}
+
+locals {
+  service-image-host = "${google_artifact_registry_repository.service-images-repo.location}-docker.pkg.dev"
+  service-image-uri  = "${local.service-image-host}/${google_project.app-engine-to-cloud-run-migration.project_id}/${google_artifact_registry_repository.service-images-repo.repository_id}/service"
+}
+
+
+provider "docker" {
+  registry_auth {
+    address = "https://${local.service-image-host}"
+    config_file_content = jsonencode({
+      credHelpers = {
+        (local.service-image-host) = "gcloud"
+      }
+    })
+  }
+}
+
+output "registry_address" {
+  value = "https://${local.service-image-host}"
+}
+
+# Build the Docker image
+resource "docker_image" "service-image-tag" {
+  name = "${local.service-image-uri}:${var.image_tag}"
+  build {
+    context    = "${path.cwd}/../sample-node-app"
+    dockerfile = "./Dockerfile"
+    platform   = "linux/amd64"
+  }
+  depends_on = [google_artifact_registry_repository.service-images-repo]
+}
+
+# Push the Docker image
+resource "docker_registry_image" "service-image-registry" {
+  name          = docker_image.service-image-tag.name
+  keep_remotely = true
+  depends_on = [docker_registry_image.service-image-registry]
+}
+
+resource "google_artifact_registry_repository" "service-images-repo" {
+  location      = var.location_id
+  project       = google_project.app-engine-to-cloud-run-migration.project_id
+  repository_id = google_project.app-engine-to-cloud-run-migration.name
+  description   = "example docker repository"
+  format        = "DOCKER"
+  docker_config {
+    immutable_tags = true
+  }
+}
+
+resource "google_service_account" "cloud-run-service-account" {
+  account_id = "${var.deploy_env}-service"
+  project    = google_project.app-engine-to-cloud-run-migration.project_id
+}
+
+
+resource "google_cloud_run_v2_service" "service-run" {
+  name     = "${var.deploy_env}-service"
+  project  = google_project.app-engine-to-cloud-run-migration.project_id
+  location = var.location_id
+
+  template {
+    containers {
+      image = "${local.service-image-uri}:${var.image_tag}"
+      env {
+        name  = "DEPLOY_ENV"
+        value = var.deploy_env
+      }
+      env {
+        name  = "GOOGLE_CLOUD_PROJECT"
+        value = google_project.app-engine-to-cloud-run-migration.project_id
+      }
+    }
+
+    service_account = google_service_account.cloud-run-service-account.email
+  }
+  depends_on = [docker_registry_image.service-image-registry]
+}
+
+# allow cloud run to read services
+resource "google_secret_manager_secret_iam_member" "secret_access" {
+  project = google_project.app-engine-to-cloud-run-migration.project_id
+  secret_id = google_secret_manager_secret.first-api-key.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.cloud-run-service-account.email}"
+}
+
+
+# allow all users to call the service
+resource "google_cloud_run_v2_service_iam_member" "anyone-can-invoke-cloud-run-service" {
+  project  = google_project.app-engine-to-cloud-run-migration.project_id
+  location = google_cloud_run_v2_service.service-run.location
+  name     = google_cloud_run_v2_service.service-run.name
+  role     = "roles/run.invoker"
+  member   = "allUsers"
 }
 
 #region Optional but in the domain of CICD
@@ -159,14 +269,12 @@ resource "google_app_engine_standard_app_version" "alpha_version" {
 
   instance_class = "F1"
 
-  automatic_scaling {
-    min_idle_instances = 0
-  }
+
   inbound_services = ["INBOUND_SERVICE_WARMUP"]
 
   noop_on_destroy           = true
   delete_service_on_destroy = true
-  depends_on = [ google_app_engine_standard_app_version.default_version ]
+  depends_on = [google_app_engine_standard_app_version.default_version]
 }
 
 resource "google_app_engine_service_split_traffic" "alpha_version_split" {
